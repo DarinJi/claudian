@@ -190,6 +190,10 @@
 /* Response duration footer - styled as another line of content */
 .claudian-response-footer {
   margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .claudian-baked-duration {
@@ -197,6 +201,18 @@
   font-size: 12px;
   font-weight: 500;
   font-style: italic;
+}
+
+.claudian-actual-model-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 /* Action buttons toolbar below user messages */

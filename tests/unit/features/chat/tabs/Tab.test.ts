@@ -3578,6 +3578,75 @@ describe('Tab - Blank Tab Draft Model Change', () => {
     expect(createInstructionRefineServiceSpy.mock.calls.length).toBeGreaterThan(initialInstructionCalls);
     expect(createTitleGenerationServiceSpy.mock.calls.length).toBeGreaterThan(initialTitleCalls);
   });
+
+  it('allows cross-provider model change on a bound cold conversation before a session exists', async () => {
+    const createInstructionRefineServiceSpy = jest.spyOn(ProviderRegistry, 'createInstructionRefineService')
+      .mockReturnValue({ cancel: jest.fn(), resetConversation: jest.fn() } as any);
+    const createTitleGenerationServiceSpy = jest.spyOn(ProviderRegistry, 'createTitleGenerationService')
+      .mockReturnValue({ cancel: jest.fn() } as any);
+    const getTaskResultInterpreterSpy = jest.spyOn(ProviderRegistry, 'getTaskResultInterpreter')
+      .mockReturnValue({} as any);
+    const getChatUIConfigSpy = jest.spyOn(ProviderRegistry, 'getChatUIConfig').mockImplementation((providerId?: string) => ({
+      getModelOptions: jest.fn().mockReturnValue([]),
+      ownsModel: jest.fn((model: string) => providerId === 'copilot'
+        ? model.startsWith('copilot:')
+        : !model.startsWith('copilot:')),
+      isAdaptiveReasoningModel: jest.fn().mockReturnValue(providerId !== 'copilot'),
+      getReasoningOptions: jest.fn().mockReturnValue([]),
+      getDefaultReasoningValue: jest.fn().mockReturnValue('high'),
+      getContextWindowSize: jest.fn().mockReturnValue(200000),
+      isDefaultModel: jest.fn().mockReturnValue(true),
+      applyModelDefaults: jest.fn(),
+      normalizeModelVariant: jest.fn((model: string) => model),
+      getCustomModelIds: jest.fn().mockReturnValue(new Set()),
+    } as any));
+
+    const conversation = {
+      id: 'conv-1',
+      providerId: 'claude',
+      title: 'Pending conversation',
+      messages: [],
+      sessionId: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const updateConversation = jest.fn().mockImplementation(async (_id: string, updates: Record<string, unknown>) => {
+      Object.assign(conversation, updates);
+    });
+    const plugin = createMockPlugin({
+      settings: {
+        ...createMockPlugin().settings,
+        providerConfigs: {
+          copilot: { enabled: true },
+        },
+      },
+      getConversationSync: jest.fn().mockReturnValue(conversation),
+      updateConversation,
+    });
+    const tab = createTab(createMockOptions({ plugin, conversation }));
+    initializeTabUI(tab, plugin);
+
+    tab.lifecycleState = 'bound_cold';
+    tab.providerId = 'claude';
+    tab.conversationId = 'conv-1';
+
+    const toolbarModule = jest.requireMock('@/features/chat/ui/InputToolbar') as {
+      createInputToolbar: jest.Mock;
+    };
+    const toolbarCallbacks = toolbarModule.createInputToolbar.mock.calls.at(-1)?.[1];
+
+    await toolbarCallbacks.onModelChange('copilot:claude-haiku-4.5');
+
+    expect(Notice).not.toHaveBeenCalled();
+    expect(tab.providerId).toBe('copilot');
+    expect(conversation.providerId).toBe('copilot');
+    expect(updateConversation).toHaveBeenCalledWith('conv-1', expect.objectContaining({ providerId: 'copilot' }));
+
+    getChatUIConfigSpy.mockRestore();
+    getTaskResultInterpreterSpy.mockRestore();
+    createTitleGenerationServiceSpy.mockRestore();
+    createInstructionRefineServiceSpy.mockRestore();
+  });
 });
 
 describe('Tab - First Send Binding', () => {

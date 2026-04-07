@@ -79,8 +79,18 @@ export class ModelSelector {
 
     this.buttonEl.empty();
 
+    const icon = displayModel?.providerIcon ?? this.callbacks.getUIConfig().getProviderIcon?.();
+    if (icon) {
+      this.buttonEl.appendChild(createProviderIconSvg(icon));
+    }
+
     const labelEl = this.buttonEl.createSpan({ cls: 'claudian-model-label' });
     labelEl.setText(displayModel?.label || 'Unknown');
+
+    const chevronEl = this.buttonEl.createSpan({ cls: 'claudian-model-chevron' });
+    setIcon(chevronEl, 'chevron-down');
+
+    this.buttonEl.setAttribute('title', displayModel?.description || 'Choose model');
   }
 
   renderOptions() {

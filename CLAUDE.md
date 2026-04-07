@@ -2,16 +2,17 @@
 
 ## Project Overview
 
-Claudian is an Obsidian plugin that embeds provider-backed chat runtimes in a sidebar and inline-edit flow. Claude is the default provider. Codex is optional and joins the same conversation model through `Conversation.providerId` plus provider-owned `providerState`.
+Claudian is an Obsidian plugin that embeds provider-backed chat runtimes in a sidebar and inline-edit flow. Claude is the default provider. Codex and Copilot are optional and join the same conversation model through `Conversation.providerId` plus provider-owned `providerState`.
 
 ## Architecture Status
 
-- Product status: Claudian is a multi-provider product. Claude is the full-feature provider. Codex is opt-in and currently supports send, stream, cancel, resume, history reload, fork, plan mode, image attachments, inline edit, `#` instruction mode, `$` skills, and subagents. Unsupported or gated Codex surfaces are rewind, runtime-discovered provider commands, in-app MCP management, and Claude plugin integration.
+- Product status: Claudian is a multi-provider product. Claude is the full-feature provider. Codex is opt-in and currently supports send, stream, cancel, resume, history reload, fork, plan mode, image attachments, inline edit, `#` instruction mode, `$` skills, and subagents. Copilot is opt-in and currently supports provider selection, settings, model routing, environment projection, ACP-backed `session/new` / `session/load` / `session/list` / `session/prompt`, session mode and model synchronization, streamed text/thinking/tool updates, persisted session resume, provider-state history hydration, prompt-side history bootstrap for new sessions and forks, and prompt-mode fallback from the vault root. Unsupported or gated Copilot surfaces are rewind, inline edit, provider command discovery, and in-app MCP management.
 - App shell: `src/app/` owns shared settings defaults and plugin-level storage helpers. `src/core/` owns provider-neutral runtime, registry, tool, and type contracts.
 - Provider boundary: `src/core/runtime/` and `src/core/providers/` define the chat-facing seam. `ProviderRegistry` creates runtimes and provider-owned auxiliary services. `ProviderWorkspaceRegistry` owns workspace services such as command catalogs, agent mention providers, CLI resolution, MCP managers, and provider settings tabs.
 - Claude adaptor: `src/providers/claude/` owns the Claude runtime, prompt encoding, stream transforms, history hydration, CLI resolution, plugin and agent discovery, MCP storage, and Claude-specific settings UI. `ClaudeCommandCatalog` merges vault commands, vault skills, and runtime-supported commands behind the shared command catalog contract.
 - Codex adaptor: `src/providers/codex/` owns the `codex app-server` runtime, JSON-RPC transport, prompt encoding, JSONL history reload, session tailing, settings reconciliation, normalization, skill cataloging, subagent storage, and Codex settings UI. `CodexSkillCatalog` provides `$` skill discovery from `.codex/skills/` and `.agents/skills/` without relying on runtime command discovery.
-- Conversations: `Conversation` carries `providerId` and opaque `providerState`. Claude state is typed behind `ClaudeProviderState`. Codex state is typed behind `CodexProviderState` and currently stores `threadId`, `sessionFilePath`, and optional fork metadata.
+- Copilot adaptor: `src/providers/copilot/` owns the Copilot CLI integration, ACP JSON-RPC transport, session/update normalization, prompt launch spec building, environment projection, remote session listing, session snapshot hydration, and Copilot settings UI. The current runtime prefers ACP-backed sessions and streaming, can enumerate Copilot sessions for `/resume`, applies session mode/model changes through ACP, restores prior message history from persisted provider state, bootstraps history into the first prompt of a new/forked session, and falls back to `copilot -p` for scenarios that still need the legacy one-shot path.
+- Conversations: `Conversation` carries `providerId` and opaque `providerState`. Claude state is typed behind `ClaudeProviderState`. Codex state is typed behind `CodexProviderState` and currently stores `threadId`, `sessionFilePath`, and optional fork metadata. Copilot state is typed behind `CopilotProviderState` and currently stores a persisted message snapshot, optional fork metadata, and current session mode/model config used for hydration and ACP resume.
 
 ## Commands
 
@@ -33,6 +34,7 @@ npm run test:coverage
 | **app** | Shared defaults and plugin-level storage helpers | `defaultSettings`, `ClaudianSettingsStorage`, `SharedStorageService` |
 | **core** | Provider-neutral contracts and infrastructure | See [`src/core/CLAUDE.md`](src/core/CLAUDE.md) |
 | **providers/claude** | Claude SDK adaptor | See [`src/providers/claude/CLAUDE.md`](src/providers/claude/CLAUDE.md) |
+| **providers/copilot** | Copilot CLI adaptor | Settings, ACP session runtime, and prompt fallback path |
 | **providers/codex** | Codex app-server adaptor | See [`src/providers/codex/CLAUDE.md`](src/providers/codex/CLAUDE.md) |
 | **features/chat** | Main sidebar interface | See [`src/features/chat/CLAUDE.md`](src/features/chat/CLAUDE.md) |
 | **features/inline-edit** | Inline edit modal and provider-backed edit services | `InlineEditModal` plus provider-owned inline edit services |

@@ -477,6 +477,33 @@ describe('MessageRenderer', () => {
     expect(durationSpan.textContent).toContain('1m 5s');
   });
 
+  it('renders actual model badge when actualModelId is present', () => {
+    const messagesEl = createMockEl();
+    const { renderer } = createRenderer(messagesEl);
+    jest.spyOn(renderer, 'renderContent').mockResolvedValue(undefined);
+
+    const msg: ChatMessage = {
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      contentBlocks: [
+        { type: 'text', content: 'Response text' } as any,
+      ],
+      actualModelId: 'claude-haiku-4.5',
+    };
+
+    renderer.renderStoredMessage(msg);
+
+    const msgEl = messagesEl.children[0];
+    const contentEl = msgEl.children[0];
+    const footerEl = contentEl.children.find((c: any) => c.hasClass('claudian-response-footer'));
+    expect(footerEl).toBeDefined();
+    const badgeEl = footerEl!.children.find((c: any) => c.hasClass('claudian-actual-model-badge'));
+    expect(badgeEl).toBeDefined();
+    expect(badgeEl.textContent).toBe('Actual model: Claude Haiku 4.5');
+  });
+
   it('does not render footer when durationSeconds is 0', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);

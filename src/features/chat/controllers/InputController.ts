@@ -26,7 +26,6 @@ import { ResumeSessionDropdown } from '../../../shared/components/ResumeSessionD
 import { InstructionModal } from '../../../shared/modals/InstructionConfirmModal';
 import type { BrowserSelectionContext } from '../../../utils/browser';
 import type { CanvasSelectionContext } from '../../../utils/canvas';
-import { formatDurationMmSs } from '../../../utils/date';
 import type { EditorSelectionContext } from '../../../utils/editor';
 import { appendMarkdownSnippet } from '../../../utils/markdown';
 import { COMPLETION_FLAVOR_WORDS } from '../constants';
@@ -150,6 +149,22 @@ export class InputController {
     }
 
     return ProviderRegistry.getCapabilities(providerId);
+  }
+
+  private resolveAssistantActualModelId(agentService: ChatRuntime | null): string | undefined {
+    if (!agentService || agentService.providerId !== 'copilot') {
+      return undefined;
+    }
+
+    const runtimeModelId = agentService.getCurrentModelId?.();
+    if (runtimeModelId && runtimeModelId.trim()) {
+      return runtimeModelId;
+    }
+
+    const usageModel = this.deps.state.usage?.model;
+    return typeof usageModel === 'string' && usageModel.trim()
+      ? usageModel
+      : undefined;
   }
 
   private isResumeSessionAtStillNeeded(resumeUuid: string, previousMessages: ChatMessage[]): boolean {
@@ -387,6 +402,8 @@ export class InputController {
       const turnMetadata = agentService.consumeTurnMetadata();
       userMsg.userMessageId = turnMetadata.userMessageId ?? userMsg.userMessageId;
       finalAssistantMsg.assistantMessageId = turnMetadata.assistantMessageId ?? finalAssistantMsg.assistantMessageId;
+      finalAssistantMsg.actualModelId = this.resolveAssistantActualModelId(agentService)
+        ?? finalAssistantMsg.actualModelId;
       didEnqueueToSdk = didEnqueueToSdk || turnMetadata.wasSent === true;
       planCompleted = planCompleted || turnMetadata.planCompleted === true;
 
@@ -415,15 +432,11 @@ export class InputController {
               COMPLETION_FLAVOR_WORDS[Math.floor(Math.random() * COMPLETION_FLAVOR_WORDS.length)];
             finalAssistantMsg.durationSeconds = durationSeconds;
             finalAssistantMsg.durationFlavorWord = flavorWord;
-            // Add footer to live message in DOM
-            if (state.currentContentEl) {
-              const footerEl = state.currentContentEl.createDiv({ cls: 'claudian-response-footer' });
-              footerEl.createSpan({
-                text: `* ${flavorWord} for ${formatDurationMmSs(durationSeconds)}`,
-                cls: 'claudian-baked-duration',
-              });
-            }
           }
+        }
+
+        if (state.currentContentEl) {
+          this.deps.renderer.renderAssistantFooter?.(state.currentContentEl, finalAssistantMsg);
         }
 
         state.currentContentEl = null;
@@ -1493,7 +1506,7 @@ export class InputController {
         break;
       }
       case 'resume':
-        this.showResumeDropdown();
+        await this.showResumeDropdown();
         break;
       case 'fork': {
         if (!this.getActiveCapabilities().supportsFork) {
@@ -1533,20 +1546,69 @@ export class InputController {
     }
   }
 
-  private showResumeDropdown(): void {
+  private async showResumeDropdown(): Promise<void> {
     const { plugin, state, conversationController } = this.deps;
 
     // Clean up any existing dropdown
     this.destroyResumeDropdown();
 
-    const conversations = plugin.getConversationList();
+    const localConversations = plugin.getConversationList();
+    const remoteConversations = await this.deps.getAgentService?.()?.listResumeConversations?.() ?? [];
+    const conversations = [...localConversations];
+    const localConversationIds = new Set(localConversations.map((conversation) => conversation.id));
+
+    for (const remote of remoteConversations) {
+      if (!conversations.some((conversation) => conversation.id === remote.id)) {
+        conversations.push(remote);
+      }
+    }
+
     if (conversations.length === 0) {
       new Notice('No conversations to resume');
       return;
     }
 
-    const openConversation = this.deps.openConversation
-      ?? ((id: string) => conversationController.switchTo(id));
+    const openConversation = async (id: string) => {
+      if (localConversationIds.has(id)) {
+        return (this.deps.openConversation
+          ? this.deps.openConversation(id)
+          : conversationController.switchTo(id));
+      }
+
+      const existingById = plugin.getConversationSync(id);
+      if (existingById) {
+        return (this.deps.openConversation
+          ? this.deps.openConversation(id)
+          : conversationController.switchTo(id));
+      }
+
+      const existingBySessionId = plugin.findConversationBySessionId?.(
+        id,
+        this.deps.getAgentService?.()?.providerId,
+      );
+      if (existingBySessionId) {
+        return (this.deps.openConversation
+          ? this.deps.openConversation(existingBySessionId.id)
+          : conversationController.switchTo(existingBySessionId.id));
+      }
+
+      const selectedMeta = conversations.find((conversation) => conversation.id === id);
+      if (!selectedMeta) {
+        return conversationController.switchTo(id);
+      }
+
+      const conversation = await plugin.createConversation({
+        providerId: selectedMeta.providerId,
+        sessionId: id,
+      });
+      await plugin.updateConversation(conversation.id, {
+        title: selectedMeta.title,
+      });
+
+      return (this.deps.openConversation
+        ? this.deps.openConversation(conversation.id)
+        : conversationController.switchTo(conversation.id));
+    };
 
     this.activeResumeDropdown = new ResumeSessionDropdown(
       this.deps.getInputContainerEl(),
@@ -1556,7 +1618,7 @@ export class InputController {
       {
         onSelect: (id) => {
           this.destroyResumeDropdown();
-          openConversation(id).catch((err: unknown) => {
+          return openConversation(id).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             new Notice(`Failed to open conversation: ${msg}`);
           });

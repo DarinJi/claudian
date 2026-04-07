@@ -604,6 +604,15 @@ export default class ClaudianPlugin extends Plugin {
     return this.conversations.find(c => c.id === id) || null;
   }
 
+  findConversationBySessionId(sessionId: string, providerId?: ProviderId): Conversation | null {
+    return this.conversations.find((conversation) => {
+      if (providerId && conversation.providerId !== providerId) {
+        return false;
+      }
+      return conversation.sessionId === sessionId;
+    }) ?? null;
+  }
+
   findEmptyConversation(): Conversation | null {
     return this.conversations.find(c => c.messages.length === 0) || null;
   }

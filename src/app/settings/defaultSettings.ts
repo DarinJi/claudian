@@ -2,6 +2,7 @@ import { getDefaultHiddenProviderCommands } from '../../core/providers/commands/
 import { type ClaudianSettings } from '../../core/types/settings';
 import { DEFAULT_CLAUDE_PROVIDER_SETTINGS } from '../../providers/claude/settings';
 import { DEFAULT_CODEX_PROVIDER_SETTINGS } from '../../providers/codex/settings';
+import { DEFAULT_COPILOT_PROVIDER_SETTINGS } from '../../providers/copilot/settings';
 
 export const DEFAULT_CLAUDIAN_SETTINGS: ClaudianSettings = {
   userName: '',
@@ -34,6 +35,7 @@ export const DEFAULT_CLAUDIAN_SETTINGS: ClaudianSettings = {
 
   providerConfigs: {
     claude: { ...DEFAULT_CLAUDE_PROVIDER_SETTINGS },
+    copilot: { ...DEFAULT_COPILOT_PROVIDER_SETTINGS },
     codex: { ...DEFAULT_CODEX_PROVIDER_SETTINGS },
   },
 

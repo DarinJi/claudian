@@ -269,6 +269,8 @@ describe('SessionStorage', () => {
       const loaded = await storage.loadMetadata('conv-roundtrip');
 
       expect(loaded!.providerId).toBe('claude');
+      expect(loaded!.messageCount).toBe(0);
+      expect(loaded!.preview).toBe('New conversation');
       expect((loaded!.providerState as any)?.providerSessionId).toBe('active-session');
       expect((loaded!.providerState as any)?.forkSource).toEqual({
         sessionId: 'parent',
@@ -298,6 +300,8 @@ describe('SessionStorage', () => {
       const loaded = await storage.loadMetadata('conv-codex-rt');
 
       expect(loaded!.providerId).toBe('codex');
+      expect(loaded!.messageCount).toBe(0);
+      expect(loaded!.preview).toBe('New conversation');
       expect((loaded!.providerState as any)?.codexSpecific).toBe('data');
     });
   });
@@ -429,6 +433,27 @@ describe('SessionStorage', () => {
       expect(metas[1].messageCount).toBe(0);
     });
 
+    it('uses persisted preview and message count when present', async () => {
+      mockAdapter.listFiles.mockResolvedValue([
+        '.claudian/sessions/session-rich.meta.json',
+      ]);
+
+      mockAdapter.read.mockResolvedValue(JSON.stringify({
+        id: 'session-rich',
+        title: 'Rich Session',
+        createdAt: 1700000000,
+        updatedAt: 1700001000,
+        preview: 'Summarize CLAUDE.md',
+        messageCount: 2,
+      }));
+
+      const metas = await storage.listAllConversations();
+
+      expect(metas).toHaveLength(1);
+      expect(metas[0].preview).toBe('Summarize CLAUDE.md');
+      expect(metas[0].messageCount).toBe(2);
+    });
+
     it('returns empty array when no metadata exists', async () => {
       mockAdapter.listFiles.mockResolvedValue([]);
 
@@ -458,6 +483,26 @@ describe('SessionStorage', () => {
   });
 
   describe('toSessionMetadata - extractSubagentData', () => {
+    it('stores preview and messageCount snapshots', () => {
+      const conversation: Conversation = {
+        id: 'conv-preview',
+        providerId: 'claude' as ProviderId,
+        title: 'Preview Test',
+        createdAt: 1700000000,
+        updatedAt: 1700001000,
+        sessionId: 'sdk-session',
+        messages: [
+          { id: 'msg-1', role: 'assistant', content: 'Intro', timestamp: 1700000001 },
+          { id: 'msg-2', role: 'user', content: 'Hello from preview metadata', timestamp: 1700000002 },
+        ],
+      };
+
+      const metadata = storage.toSessionMetadata(conversation);
+
+      expect(metadata.messageCount).toBe(2);
+      expect(metadata.preview).toBe('Hello from preview metadata');
+    });
+
     it('extracts subagent data from Task toolCalls', () => {
       const conversation: Conversation = {
         id: 'conv-subagent',

@@ -188,6 +188,7 @@ describe('ModelSelector', () => {
     const label = btn?.querySelector('.claudian-model-label');
     expect(label).not.toBeNull();
     expect(label?.textContent).toBe('Sonnet');
+    expect(btn?.querySelector('.claudian-model-chevron')).not.toBeNull();
   });
 
   it('should display first model when current model not found', () => {

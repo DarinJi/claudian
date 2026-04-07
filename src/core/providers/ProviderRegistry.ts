@@ -26,6 +26,41 @@ import {
 export class ProviderRegistry {
   private static registrations: Partial<Record<ProviderId, ProviderRegistration>> = {};
 
+  private static hasExplicitEnabledSetting(
+    providerId: ProviderId,
+    settings: Record<string, unknown>,
+  ): boolean {
+    const legacyKey = `${providerId}Enabled`;
+    if (legacyKey in settings) {
+      return true;
+    }
+
+    const providerConfigs = settings.providerConfigs;
+    if (!providerConfigs || typeof providerConfigs !== 'object' || Array.isArray(providerConfigs)) {
+      return false;
+    }
+
+    const providerConfig = (providerConfigs as Record<string, unknown>)[providerId];
+    return !!providerConfig
+      && typeof providerConfig === 'object'
+      && !Array.isArray(providerConfig)
+      && 'enabled' in providerConfig;
+  }
+
+  private static isLikelyFullSettingsContext(settings: Record<string, unknown>): boolean {
+    return [
+      'model',
+      'settingsProvider',
+      'permissionMode',
+      'thinkingBudget',
+      'effortLevel',
+      'serviceTier',
+      'codexEnabled',
+      'copilotEnabled',
+      'providerConfigs',
+    ].some((key) => key in settings);
+  }
+
   static register(
     providerId: ProviderId,
     registration: ProviderRegistration,
@@ -135,8 +170,23 @@ export class ProviderRegistry {
     model: string,
     settings: Record<string, unknown> = {},
   ): ProviderId {
+    const hasExplicitSettings = Object.keys(settings).length > 0;
+    const isFullSettingsContext = this.isLikelyFullSettingsContext(settings);
+
     for (const providerId of this.getRegisteredProviderIds()) {
       if (providerId === DEFAULT_CHAT_PROVIDER_ID) {
+        continue;
+      }
+
+      if (
+        (isFullSettingsContext && !this.isEnabled(providerId, settings))
+        || (
+          hasExplicitSettings
+          && !isFullSettingsContext
+          && this.hasExplicitEnabledSetting(providerId, settings)
+          && !this.isEnabled(providerId, settings)
+        )
+      ) {
         continue;
       }
 

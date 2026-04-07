@@ -82,6 +82,7 @@ function createMockAgentService() {
     cancel: jest.fn(),
     resetSession: jest.fn(),
     setResumeCheckpoint: jest.fn(),
+    getCurrentModelId: jest.fn().mockReturnValue(null),
     setApprovedPlanContent: jest.fn(),
     setCurrentPlanFilePath: jest.fn(),
     getApprovedPlanContent: jest.fn().mockReturnValue(null),
@@ -139,6 +140,7 @@ function createMockDeps(overrides: Partial<InputControllerDeps> = {}): InputCont
       addMessage: jest.fn().mockReturnValue({
         querySelector: jest.fn().mockReturnValue(createMockEl()),
       }),
+      renderAssistantFooter: jest.fn(),
       refreshActionButtons: jest.fn(),
       removeMessage: jest.fn(),
       updateLiveUserMessage: jest.fn(),
@@ -984,6 +986,38 @@ describe('InputController - Message Queue', () => {
       expect(queryCall[0].mcpMentions).toBe(mcpMentions);
     });
 
+    it('stores the actual Copilot model id on the assistant message', async () => {
+      const sendableDeps = createSendableDeps();
+      deps = sendableDeps;
+      sendableDeps.mockAgentService.providerId = 'copilot';
+      sendableDeps.mockAgentService.getCapabilities = jest.fn().mockReturnValue({
+        providerId: 'copilot',
+        supportsPersistentRuntime: true,
+        supportsNativeHistory: true,
+        supportsPlanMode: false,
+        supportsRewind: false,
+        supportsFork: true,
+        supportsProviderCommands: false,
+        supportsTurnSteer: false,
+        reasoningControl: 'none',
+      });
+      sendableDeps.mockAgentService.getCurrentModelId = jest.fn().mockReturnValue('claude-haiku-4.5');
+      sendableDeps.mockAgentService.query = jest.fn().mockImplementation(() => createMockStream([
+        { type: 'text', content: 'hello from haiku' },
+        { type: 'done' },
+      ]));
+
+      inputEl = sendableDeps.getInputEl() as ReturnType<typeof createMockInputEl>;
+      inputEl.value = 'hello';
+      controller = new InputController(sendableDeps);
+
+      await controller.sendMessage();
+
+      const assistantMessage = sendableDeps.state.messages.find((message) => message.role === 'assistant');
+      expect(assistantMessage?.actualModelId).toBe('claude-haiku-4.5');
+      expect((sendableDeps.renderer as any).renderAssistantFooter).toHaveBeenCalled();
+    });
+
     it('should append browser selection context when available', async () => {
       const mockAgentService = createMockAgentService();
       const localDeps = createSendableDeps({
@@ -1699,9 +1733,7 @@ describe('InputController - Message Queue', () => {
       await controller.sendMessage();
 
       const callbacks = (ResumeSessionDropdown as jest.Mock).mock.calls[0][4];
-      callbacks.onSelect('conv-1');
-
-      await Promise.resolve();
+      await callbacks.onSelect('conv-1');
 
       expect(mockNotice).toHaveBeenCalledWith('Failed to open conversation: session not found');
     });

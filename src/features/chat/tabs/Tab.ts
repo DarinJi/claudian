@@ -226,6 +226,46 @@ function refreshTabProviderUI(tab: TabData, plugin: ClaudianPlugin): void {
   );
 }
 
+function canUseMixedModelPicker(tab: TabProviderContext, plugin: ClaudianPlugin): boolean {
+  if (tab.lifecycleState === 'blank') {
+    return true;
+  }
+
+  if (!tab.conversationId) {
+    return false;
+  }
+
+  const conversation = plugin.getConversationSync(tab.conversationId);
+  return !!conversation && !conversation.sessionId;
+}
+
+async function syncPendingConversationProvider(
+  tab: TabProviderContext,
+  plugin: ClaudianPlugin,
+  providerId: ProviderId,
+): Promise<void> {
+  if (!tab.conversationId) {
+    return;
+  }
+
+  const conversation = plugin.getConversationSync(tab.conversationId);
+  if (!conversation || conversation.sessionId) {
+    return;
+  }
+
+  conversation.providerId = providerId;
+  conversation.providerState = undefined;
+  conversation.sessionId = null;
+
+  if (typeof plugin.updateConversation === 'function') {
+    await plugin.updateConversation(tab.conversationId, {
+      providerId,
+      providerState: undefined,
+      sessionId: null,
+    });
+  }
+}
+
 /**
  * Hides or disables UI elements that the active provider does not support.
  * Called after toolbar initialization and on provider switches.
@@ -284,7 +324,7 @@ export function onProviderAvailabilityChanged(tab: TabData, plugin: ClaudianPlug
   const enabledProviderIds = ProviderRegistry.getEnabledProviderIds(settingsSnapshot);
 
   if (tab.draftModel) {
-    const draftProvider = getProviderForModel(tab.draftModel, settingsSnapshot);
+    const draftProvider = getProviderForModel(tab.draftModel);
     if (!enabledProviderIds.includes(draftProvider)) {
       const fallbackProviderId = enabledProviderIds[0] ?? DEFAULT_CHAT_PROVIDER_ID;
       const fallbackModels = ProviderRegistry.getChatUIConfig(fallbackProviderId)
@@ -708,8 +748,8 @@ function initializeInputToolbar(
 
   const inputToolbar = dom.inputWrapper.createDiv({ cls: 'claudian-input-toolbar' });
 
-  // Blank-tab UI config wrapper that returns mixed model options
-  const blankTabUIConfigProxy = (): ProviderChatUIConfig => {
+  // Pre-session UI config wrapper that returns mixed model options.
+  const mixedModelPickerUIConfig = (): ProviderChatUIConfig => {
     const draftProvider = tab.draftModel
       ? getProviderForModel(tab.draftModel, plugin.settings as unknown as Record<string, unknown>)
       : DEFAULT_CHAT_PROVIDER_ID;
@@ -723,8 +763,8 @@ function initializeInputToolbar(
 
   const toolbarComponents = createInputToolbar(inputToolbar, {
     getUIConfig: () => {
-      if (tab.lifecycleState === 'blank') {
-        return blankTabUIConfigProxy();
+      if (canUseMixedModelPicker(tab, plugin)) {
+        return mixedModelPickerUIConfig();
       }
       return getTabChatUIConfig(tab, plugin);
     },
@@ -732,8 +772,8 @@ function initializeInputToolbar(
     getSettings: () => getTabSettingsSnapshot(tab, plugin),
     getEnvironmentVariables: () => plugin.getActiveEnvironmentVariables(),
     onModelChange: async (model: string) => {
-      // For blank tabs, update draft model and derive provider
-      if (tab.lifecycleState === 'blank') {
+      // For blank or pre-session tabs, update the draft model and allow provider switching.
+      if (canUseMixedModelPicker(tab, plugin)) {
         const previousProvider = tab.providerId;
         tab.draftModel = model;
         const newProvider = getProviderForModel(model, plugin.settings as unknown as Record<string, unknown>);
@@ -741,6 +781,7 @@ function initializeInputToolbar(
           cleanupTabRuntime(tab);
         }
         tab.providerId = newProvider;
+        await syncPendingConversationProvider(tab, plugin, newProvider);
         if (newProvider !== previousProvider) {
           syncTabProviderServices(tab, plugin);
         }

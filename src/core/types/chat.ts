@@ -59,6 +59,8 @@ export interface ChatMessage {
   userMessageId?: string;
   /** Provider-native assistant message identifier used for rewind/fork checkpoints. */
   assistantMessageId?: string;
+  /** Actual runtime model used for this assistant message, when known. */
+  actualModelId?: string;
 }
 
 /** Persisted conversation with messages and session state. */
@@ -114,6 +116,10 @@ export interface SessionMetadata {
   createdAt: number;
   updatedAt: number;
   lastResponseAt?: number;
+  /** Snapshot of conversation length for history dropdowns. */
+  messageCount?: number;
+  /** Snapshot preview text for history dropdowns. */
+  preview?: string;
   /** Session ID used for provider resume (may be cleared when invalidated). */
   sessionId?: string | null;
   /** Opaque provider-owned state bag. */

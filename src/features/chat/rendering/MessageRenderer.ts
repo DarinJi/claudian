@@ -354,16 +354,64 @@ export class MessageRenderer {
       }
     }
 
-    // Render response duration footer (skip when message contains a compaction boundary)
+    // Render assistant footer metadata (duration, actual model) unless compacted.
     const hasCompactBoundary = msg.contentBlocks?.some(b => b.type === 'context_compacted');
-    if (msg.durationSeconds && msg.durationSeconds > 0 && !hasCompactBoundary) {
+    if (!hasCompactBoundary) {
+      this.renderAssistantFooter(contentEl, msg);
+    }
+  }
+
+  renderAssistantFooter(contentEl: HTMLElement, msg: ChatMessage): void {
+    const shouldShowDuration = !!msg.durationSeconds && msg.durationSeconds > 0;
+    const actualModelLabel = this.formatActualModelLabel(msg.actualModelId);
+
+    if (!shouldShowDuration && !actualModelLabel) {
+      return;
+    }
+
+    const existingFooter = contentEl.querySelector('.claudian-response-footer');
+    existingFooter?.remove();
+
+    const footerEl = contentEl.createDiv({ cls: 'claudian-response-footer' });
+
+    if (shouldShowDuration) {
       const flavorWord = msg.durationFlavorWord || 'Baked';
-      const footerEl = contentEl.createDiv({ cls: 'claudian-response-footer' });
       footerEl.createSpan({
-        text: `* ${flavorWord} for ${formatDurationMmSs(msg.durationSeconds)}`,
+        text: `* ${flavorWord} for ${formatDurationMmSs(msg.durationSeconds!)}`,
         cls: 'claudian-baked-duration',
       });
     }
+
+    if (actualModelLabel) {
+      footerEl.createSpan({
+        text: actualModelLabel,
+        cls: 'claudian-actual-model-badge',
+      });
+    }
+  }
+
+  private formatActualModelLabel(modelId?: string): string | null {
+    if (!modelId) {
+      return null;
+    }
+
+    const normalized = modelId.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.startsWith('claude-')) {
+      const parts = normalized.split('-');
+      const family = parts[1] ? parts[1].charAt(0).toUpperCase() + parts[1].slice(1) : 'Claude';
+      const version = parts.slice(2).join('.');
+      return `Actual model: Claude ${family}${version ? ` ${version}` : ''}`;
+    }
+
+    if (normalized.startsWith('gpt-')) {
+      return `Actual model: ${normalized.toUpperCase()}`;
+    }
+
+    return `Actual model: ${normalized}`;
   }
 
   /**

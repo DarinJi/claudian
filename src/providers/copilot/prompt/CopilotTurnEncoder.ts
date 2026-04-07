@@ -1,0 +1,40 @@
+import type { ChatTurnRequest, PreparedChatTurn } from '../../../core/runtime/types';
+import { appendBrowserContext } from '../../../utils/browser';
+import { appendCanvasContext } from '../../../utils/canvas';
+import { appendCurrentNote } from '../../../utils/context';
+import { appendEditorContext } from '../../../utils/editor';
+
+function isCompactCommand(text: string): boolean {
+  return /^\/compact(\s|$)/i.test(text);
+}
+
+export function encodeCopilotTurn(request: ChatTurnRequest): PreparedChatTurn {
+  const isCompact = isCompactCommand(request.text);
+
+  let persistedContent = request.text;
+  if (!isCompact) {
+    if (request.currentNotePath) {
+      persistedContent = appendCurrentNote(persistedContent, request.currentNotePath);
+    }
+
+    if (request.editorSelection) {
+      persistedContent = appendEditorContext(persistedContent, request.editorSelection);
+    }
+
+    if (request.browserSelection) {
+      persistedContent = appendBrowserContext(persistedContent, request.browserSelection);
+    }
+
+    if (request.canvasSelection) {
+      persistedContent = appendCanvasContext(persistedContent, request.canvasSelection);
+    }
+  }
+
+  return {
+    request,
+    persistedContent,
+    prompt: persistedContent,
+    isCompact,
+    mcpMentions: new Set(),
+  };
+}

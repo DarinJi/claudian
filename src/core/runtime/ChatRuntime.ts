@@ -1,5 +1,5 @@
 import type { ProviderCapabilities, ProviderId } from '../providers/types';
-import type { ChatMessage, Conversation, SlashCommand, StreamChunk, ToolCallInfo } from '../types';
+import type { ChatMessage, Conversation, ConversationMeta, SlashCommand, StreamChunk, ToolCallInfo } from '../types';
 import type {
   ApprovalCallback,
   AskUserQuestionCallback,
@@ -43,6 +43,7 @@ export interface ChatRuntime {
   getSupportedCommands(): Promise<SlashCommand[]>;
   cleanup(): void;
   rewind(userMessageId: string, assistantMessageId: string): Promise<ChatRewindResult>;
+  getCurrentModelId?(): string | null;
   setApprovalCallback(callback: ApprovalCallback | null): void;
   setApprovalDismisser(dismisser: (() => void) | null): void;
   setAskUserQuestionCallback(callback: AskUserQuestionCallback | null): void;
@@ -58,6 +59,8 @@ export interface ChatRuntime {
   }): SessionUpdateResult;
 
   resolveSessionIdForFork(conversation: Conversation | null): string | null;
+
+  listResumeConversations?(): Promise<ConversationMeta[]>;
 
   loadSubagentToolCalls?(agentId: string): Promise<ToolCallInfo[]>;
   loadSubagentFinalResult?(agentId: string): Promise<string | null>;

@@ -13,6 +13,16 @@ export {
   SESSIONS_PATH,
 };
 
+function getConversationPreview(conversation: Conversation): string {
+  const firstUserMsg = conversation.messages.find((message) => message.role === 'user');
+  if (!firstUserMsg) {
+    return 'New conversation';
+  }
+
+  return firstUserMsg.content.substring(0, 50)
+    + (firstUserMsg.content.length > 50 ? '...' : '');
+}
+
 export class SessionStorage {
   constructor(private adapter: VaultFileAdapter) {}
 
@@ -89,8 +99,8 @@ export class SessionStorage {
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
       lastResponseAt: meta.lastResponseAt,
-      messageCount: 0,
-      preview: 'SDK session',
+      messageCount: meta.messageCount ?? 0,
+      preview: meta.preview ?? 'SDK session',
       titleGenerationStatus: meta.titleGenerationStatus,
     }));
 
@@ -113,6 +123,8 @@ export class SessionStorage {
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
       lastResponseAt: conversation.lastResponseAt,
+      messageCount: conversation.messages.length,
+      preview: getConversationPreview(conversation),
       sessionId: conversation.sessionId,
       providerState: providerState && Object.keys(providerState).length > 0 ? providerState : undefined,
       currentNote: conversation.currentNote,
