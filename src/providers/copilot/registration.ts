@@ -19,9 +19,9 @@ export const copilotProviderRegistration: ProviderRegistration = {
   chatUIConfig: copilotChatUIConfig,
   settingsReconciler: copilotSettingsReconciler,
   createRuntime: ({ plugin }) => new CopilotChatRuntime(plugin),
-  createTitleGenerationService: (plugin) => new CopilotTitleGenerationService(),
-  createInstructionRefineService: (_plugin) => new CopilotInstructionRefineService(),
-  createInlineEditService: (_plugin) => new CopilotInlineEditService(),
+  createTitleGenerationService: (plugin) => new CopilotTitleGenerationService(plugin),
+  createInstructionRefineService: (plugin) => new CopilotInstructionRefineService(plugin),
+  createInlineEditService: (plugin) => new CopilotInlineEditService(plugin),
   historyService: new CopilotConversationHistoryService(),
   taskResultInterpreter: new CopilotTaskResultInterpreter(),
 };

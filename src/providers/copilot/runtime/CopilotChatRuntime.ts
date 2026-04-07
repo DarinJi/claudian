@@ -105,6 +105,7 @@ export class CopilotChatRuntime implements ChatRuntime {
   private autoTurnCallback: ((result: AutoTurnResult) => void) | null = null;
   private resumeCheckpoint: string | undefined;
   private canceled = false;
+  private currentExternalContextPaths: string[] = [];
   private currentModeId: string | null = null;
   private currentModelId: string | null = null;
   private currentConfigValues: Record<string, string> = {};
@@ -140,11 +141,12 @@ export class CopilotChatRuntime implements ChatRuntime {
 
   syncConversationState(
     conversation: ChatRuntimeConversationState | null,
-    _externalContextPaths?: string[],
+    externalContextPaths?: string[],
   ): void {
     if (!conversation) {
       this.desiredSessionId = null;
       this.acpSessionId = null;
+      this.currentExternalContextPaths = [];
       this.currentModeId = null;
       this.currentModelId = null;
       this.currentConfigValues = {};
@@ -161,6 +163,7 @@ export class CopilotChatRuntime implements ChatRuntime {
       this.acpSessionId = conversation.sessionId ?? null;
     }
 
+    this.currentExternalContextPaths = [...(externalContextPaths ?? [])];
     this.currentModeId = state.currentModeId ?? null;
     this.currentModelId = state.currentModelId ?? null;
     this.currentConfigValues = { ...(state.configValues ?? {}) };
@@ -170,18 +173,19 @@ export class CopilotChatRuntime implements ChatRuntime {
     // Copilot CLI owns MCP loading. A future ACP turn implementation can add explicit reloads.
   }
 
-  async ensureReady(_options?: ChatRuntimeEnsureReadyOptions): Promise<boolean> {
+  async ensureReady(options?: ChatRuntimeEnsureReadyOptions): Promise<boolean> {
     const cliPath = this.plugin.getResolvedProviderCliPath(this.providerId);
     const providerSettings = this.getProviderSettings();
     const copilotSettings = getCopilotProviderSettings(providerSettings);
     const hasCli = Boolean(cliPath && cliPath.trim().length > 0);
+    const externalContextPaths = options?.externalContextPaths ?? this.currentExternalContextPaths;
 
     this.acpWarning = null;
 
     if (hasCli && copilotSettings.useACP) {
       try {
         const defaultModel = this.resolveModel();
-        await this.ensureAcpProcess(defaultModel);
+        await this.ensureAcpProcess(defaultModel, externalContextPaths);
       } catch (error) {
         this.acpWarning = error instanceof Error ? error.message : String(error);
         await this.shutdownAcpProcess();
@@ -203,10 +207,14 @@ export class CopilotChatRuntime implements ChatRuntime {
     this.turnMetadata = { wasSent: true };
 
     const providerSettings = this.getProviderSettings();
-    const ready = await this.ensureReady();
     const selectedModel = this.resolveModel(queryOptions);
     const prompt = turn.prompt.trim();
     const history = conversationHistory ?? [];
+    const externalContextPaths = [
+      ...(turn.request.externalContextPaths ?? []),
+      ...(queryOptions?.externalContextPaths ?? []),
+    ];
+    const ready = await this.ensureReady({ externalContextPaths });
 
     yield { type: 'assistant_message_start' };
 
@@ -235,14 +243,8 @@ export class CopilotChatRuntime implements ChatRuntime {
       return;
     }
 
-    const externalContextPaths = [
-      ...(turn.request.externalContextPaths ?? []),
-      ...(queryOptions?.externalContextPaths ?? []),
-    ];
-
     if (getCopilotProviderSettings(providerSettings).useACP
-      && !this.acpWarning
-      && externalContextPaths.length === 0) {
+      && !this.acpWarning) {
       try {
         for await (const chunk of this.runAcpTurn(selectedModel, prompt, history)) {
           yield chunk;
@@ -257,12 +259,6 @@ export class CopilotChatRuntime implements ChatRuntime {
           content: `ACP turn failed, falling back to prompt mode: ${message}`,
         };
       }
-    } else if (externalContextPaths.length > 0 && getCopilotProviderSettings(providerSettings).useACP) {
-      yield {
-        type: 'notice',
-        level: 'info',
-        content: 'Using prompt fallback because this turn includes external context paths that are not yet wired into the ACP session flow.',
-      };
     }
 
     const launchSpec = resolveCopilotPromptLaunchSpec(this.plugin, {
@@ -318,6 +314,7 @@ export class CopilotChatRuntime implements ChatRuntime {
     this.desiredSessionId = null;
     this.resumeCheckpoint = undefined;
     this.sessionInvalidated = false;
+    this.currentExternalContextPaths = [];
     this.currentModeId = null;
     this.currentModelId = null;
     this.currentConfigValues = {};
@@ -476,8 +473,8 @@ export class CopilotChatRuntime implements ChatRuntime {
     return null;
   }
 
-  private async ensureAcpProcess(selectedModel: string): Promise<void> {
-    const launchSpec = resolveCopilotAcpLaunchSpec(this.plugin, selectedModel);
+  private async ensureAcpProcess(selectedModel: string, externalContextPaths?: string[]): Promise<void> {
+    const launchSpec = resolveCopilotAcpLaunchSpec(this.plugin, selectedModel, externalContextPaths);
     const configKey = JSON.stringify({
       command: launchSpec.command,
       args: launchSpec.args,

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 import type { ProviderId } from '../../../core/providers/types';
 import type ClaudianPlugin from '../../../main';
 import { getEnhancedPath, parseEnvironmentVariables } from '../../../utils/env';
@@ -34,19 +37,75 @@ export function buildCopilotEnvironment(
   };
 }
 
+function normalizeContextDirectory(rawPath: string): string | null {
+  const trimmed = rawPath.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return null;
+  }
+
+  try {
+    const stat = fs.statSync(trimmed);
+    if (stat.isDirectory()) {
+      return trimmed;
+    }
+  } catch {
+    // Fall through to best-effort dirname normalization.
+  }
+
+  return path.dirname(trimmed);
+}
+
+export function resolveCopilotContextAddDirs(
+  hostVaultPath: string | null,
+  externalContextPaths?: string[],
+): string[] {
+  const normalizedVaultPath = hostVaultPath?.trim() || null;
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+
+  for (const rawPath of externalContextPaths ?? []) {
+    if (typeof rawPath !== 'string') {
+      continue;
+    }
+
+    const normalizedDir = normalizeContextDirectory(rawPath);
+    if (!normalizedDir) {
+      continue;
+    }
+
+    if (normalizedVaultPath
+      && (normalizedDir === normalizedVaultPath
+        || normalizedDir.startsWith(normalizedVaultPath + path.sep))) {
+      continue;
+    }
+
+    if (seen.has(normalizedDir)) {
+      continue;
+    }
+
+    seen.add(normalizedDir);
+    resolved.push(normalizedDir);
+  }
+
+  return resolved;
+}
+
 export function resolveCopilotAcpLaunchSpec(
   plugin: ClaudianPlugin,
   model: string,
+  externalContextPaths?: string[],
 ): CopilotLaunchSpec {
   const settingsBag = plugin.settings as unknown as Record<string, unknown>;
   const copilotSettings = getCopilotProviderSettings(settingsBag);
+  const hostVaultPath = getCopilotWorkingDirectory(plugin);
 
   return buildCopilotAcpLaunchSpec({
     resolvedCliCommand: plugin.getResolvedProviderCliPath('copilot'),
-    hostVaultPath: getCopilotWorkingDirectory(plugin),
+    hostVaultPath,
     env: buildCopilotEnvironment(plugin),
     model,
     permissionMode: plugin.settings.permissionMode,
+    addDirs: resolveCopilotContextAddDirs(hostVaultPath, externalContextPaths),
     extraArgs: copilotSettings.extraArgs,
   });
 }
@@ -62,14 +121,15 @@ export function resolveCopilotPromptLaunchSpec(
 ): CopilotLaunchSpec {
   const settingsBag = plugin.settings as unknown as Record<string, unknown>;
   const copilotSettings = getCopilotProviderSettings(settingsBag);
+  const hostVaultPath = getCopilotWorkingDirectory(plugin);
 
   return buildCopilotPromptLaunchSpec({
     resolvedCliCommand: plugin.getResolvedProviderCliPath('copilot'),
-    hostVaultPath: getCopilotWorkingDirectory(plugin),
+    hostVaultPath,
     env: buildCopilotEnvironment(plugin),
     model: options.model,
     permissionMode: plugin.settings.permissionMode,
-    addDirs: options.externalContextPaths,
+    addDirs: resolveCopilotContextAddDirs(hostVaultPath, options.externalContextPaths),
     allowedTools: options.allowedTools,
     extraArgs: copilotSettings.extraArgs,
     prompt: options.prompt,
