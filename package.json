@@ -1,7 +1,7 @@
 {
   "name": "claudian",
   "version": "2.0.1",
-  "description": "Claudian - Claude Code embedded in Obsidian sidebar",
+  "description": "Claudian - Claude Code and Copilot with Claude embedded in Obsidian sidebar",
   "main": "main.js",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
