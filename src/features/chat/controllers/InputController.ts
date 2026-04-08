@@ -267,7 +267,7 @@ export class InputController {
     // Slash commands are passed directly to SDK for handling
     // SDK handles expansion, $ARGUMENTS, @file references, and frontmatter options
     const images = imageContextManager?.getAttachedImages() || [];
-    const imagesForMessage = images.length > 0 ? [...images] : undefined;
+    const imagesForMessage = images.length > 0 ? this.cloneImages(images) : undefined;
     const isCompact = /^\/compact(\s|$)/i.test(content);
 
     // Only clear images if we consumed user input (not for programmatic content override)
@@ -291,7 +291,7 @@ export class InputController {
       content: displayContent,
       displayContent,                // Original user input (for UI display)
       timestamp: Date.now(),
-      images: imagesForMessage,
+      images: this.cloneImages(imagesForMessage),
     };
     state.addMessage(userMsg);
     renderer.addMessage(userMsg);
@@ -311,7 +311,7 @@ export class InputController {
     this.activateStreamingAssistantMessage(assistantMsg);
     this.pendingProviderUserMessages = [{
       displayContent,
-      images: imagesForMessage,
+      images: this.cloneImages(imagesForMessage),
     }];
     this.sawInitialProviderUserMessage = false;
     this.awaitingProviderAssistantStart = true;
@@ -669,7 +669,7 @@ export class InputController {
       displayContent: options.content,
       turnRequest: {
         text: transformedText,
-        images: options.images,
+        images: this.cloneImages(options.images),
         currentNotePath: shouldSendCurrentNote && currentNotePath ? currentNotePath : undefined,
         editorSelection: editorContext,
         browserSelection: browserContext,
@@ -709,10 +709,14 @@ export class InputController {
       && typeof agentService?.steer === 'function';
   }
 
+  private cloneImages(images?: ChatMessage['images']): ChatMessage['images'] {
+    return images?.map((image) => ({ ...image }));
+  }
+
   private cloneQueuedMessage(message: QueuedMessage): QueuedMessage {
     return {
       ...message,
-      images: message.images ? [...message.images] : undefined,
+      images: this.cloneImages(message.images),
     };
   }
 
@@ -761,16 +765,17 @@ export class InputController {
     if (!existing) {
       return {
         ...incoming,
-        images: incoming.images ? [...incoming.images] : undefined,
+        images: this.cloneImages(incoming.images),
       };
     }
 
     const contentParts = [existing.content, incoming.content].filter(part => part.length > 0);
+    const mergedImages = [...(existing.images || []), ...(incoming.images || [])];
 
     return {
       content: contentParts.join('\n\n'),
-      images: [...(existing.images || []), ...(incoming.images || [])].filter(Boolean).length > 0
-        ? [...(existing.images || []), ...(incoming.images || [])]
+      images: mergedImages.filter(Boolean).length > 0
+        ? this.cloneImages(mergedImages)
         : undefined,
       editorContext: incoming.editorContext,
       browserContext: incoming.browserContext,
@@ -822,7 +827,7 @@ export class InputController {
         currentNote: preparedTurn.isCompact
           ? undefined
           : preparedTurn.request.currentNotePath,
-        images: queuedMessage.images,
+        images: this.cloneImages(queuedMessage.images),
       });
     } catch {
       this.restoreQueuedMessageAfterSteerFailure(queuedMessage);

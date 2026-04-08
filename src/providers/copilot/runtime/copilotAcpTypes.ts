@@ -9,6 +9,21 @@ export interface CopilotAcpContentBlock {
   text?: string;
 }
 
+export interface CopilotAcpPromptTextContentBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface CopilotAcpPromptImageContentBlock {
+  type: 'image';
+  mimeType: string;
+  data: string;
+}
+
+export type CopilotAcpPromptContentBlock =
+  | CopilotAcpPromptTextContentBlock
+  | CopilotAcpPromptImageContentBlock;
+
 export interface CopilotAcpPromptModelOption {
   modelId: string;
   name?: string;
@@ -52,6 +67,17 @@ export interface CopilotAcpListSessionsResponse {
   sessions?: CopilotAcpListedSession[];
 }
 
+export interface CopilotAcpSessionReferenceRequest {
+  sessionId: string;
+  cwd?: string;
+  mcpServers?: string[];
+}
+
+export interface CopilotAcpNewSessionRequest {
+  cwd?: string;
+  mcpServers?: string[];
+}
+
 export interface CopilotAcpNewSessionResponse {
   sessionId: string;
   models?: CopilotAcpSessionModelsState;
@@ -71,6 +97,11 @@ export interface CopilotAcpPromptResponse {
   stopReason?: string;
 }
 
+export interface CopilotAcpPromptRequest {
+  sessionId: string;
+  prompt: CopilotAcpPromptContentBlock[];
+}
+
 export interface CopilotAcpSetModeResponse {
   modes?: CopilotAcpSessionModesState;
   configOptions?: CopilotAcpSessionConfigOption[];
@@ -79,6 +110,33 @@ export interface CopilotAcpSetModeResponse {
 export interface CopilotAcpSetConfigOptionResponse {
   models?: CopilotAcpSessionModelsState;
   configOptions?: CopilotAcpSessionConfigOption[];
+}
+
+export interface CopilotAcpPermissionOption {
+  optionId: string;
+  kind?: string;
+  name?: string;
+}
+
+export interface CopilotAcpPermissionToolCall {
+  toolCallId?: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  rawInput?: Record<string, unknown>;
+  locations?: CopilotAcpToolCallLocation[];
+}
+
+export interface CopilotAcpPermissionRequest {
+  sessionId: string;
+  toolCall?: CopilotAcpPermissionToolCall;
+  options?: CopilotAcpPermissionOption[];
+}
+
+export interface CopilotAcpPermissionResponse {
+  outcome: {
+    optionId: string;
+  };
 }
 
 export interface CopilotAcpToolCallLocation {

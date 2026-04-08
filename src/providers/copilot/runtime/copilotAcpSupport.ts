@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import type { McpServerConfig } from '../../../core/types';
 import type { ProviderId } from '../../../core/providers/types';
 import type ClaudianPlugin from '../../../main';
 import { getEnhancedPath, parseEnvironmentVariables } from '../../../utils/env';
@@ -94,6 +95,7 @@ export function resolveCopilotAcpLaunchSpec(
   plugin: ClaudianPlugin,
   model: string,
   externalContextPaths?: string[],
+  mcpServers?: Record<string, McpServerConfig>,
 ): CopilotLaunchSpec {
   const settingsBag = plugin.settings as unknown as Record<string, unknown>;
   const copilotSettings = getCopilotProviderSettings(settingsBag);
@@ -106,6 +108,7 @@ export function resolveCopilotAcpLaunchSpec(
     model,
     permissionMode: plugin.settings.permissionMode,
     addDirs: resolveCopilotContextAddDirs(hostVaultPath, externalContextPaths),
+    mcpServers,
     extraArgs: copilotSettings.extraArgs,
   });
 }
@@ -117,6 +120,7 @@ export function resolveCopilotPromptLaunchSpec(
     model: string;
     allowedTools?: string[];
     externalContextPaths?: string[];
+    mcpServers?: Record<string, McpServerConfig>;
   },
 ): CopilotLaunchSpec {
   const settingsBag = plugin.settings as unknown as Record<string, unknown>;
@@ -131,6 +135,7 @@ export function resolveCopilotPromptLaunchSpec(
     permissionMode: plugin.settings.permissionMode,
     addDirs: resolveCopilotContextAddDirs(hostVaultPath, options.externalContextPaths),
     allowedTools: options.allowedTools,
+    mcpServers: options.mcpServers,
     extraArgs: copilotSettings.extraArgs,
     prompt: options.prompt,
   });

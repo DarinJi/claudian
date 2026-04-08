@@ -15,6 +15,7 @@ import {
   getRuntimeEnvironmentText,
   setEnvironmentVariablesForScope,
 } from './core/providers/providerEnvironment';
+import { shouldClearImageDataAfterSave } from './core/providers/imageDataRetention';
 import { ProviderRegistry } from './core/providers/ProviderRegistry';
 import { ProviderSettingsCoordinator } from './core/providers/ProviderSettingsCoordinator';
 import { ProviderWorkspaceRegistry } from './core/providers/ProviderWorkspaceRegistry';
@@ -577,9 +578,10 @@ export default class ClaudianPlugin extends Plugin {
       this.storage.sessions.toSessionMetadata(conversation)
     );
 
-    // Clear image data from memory after save (data is persisted by SDK).
-    // Skip for pending forks: their deep-cloned images aren't in SDK storage yet.
-    if (!ProviderRegistry.getConversationHistoryService(conversation.providerId).isPendingForkConversation(conversation)) {
+    if (
+      shouldClearImageDataAfterSave(conversation.providerId)
+      && !ProviderRegistry.getConversationHistoryService(conversation.providerId).isPendingForkConversation(conversation)
+    ) {
       for (const msg of conversation.messages) {
         if (msg.images) {
           for (const img of msg.images) {

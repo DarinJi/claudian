@@ -1,9 +1,14 @@
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import type { Readable } from 'stream';
 
+import type { McpServerManager } from '../../../core/mcp/McpServerManager';
 import { ProviderSettingsCoordinator } from '../../../core/providers/ProviderSettingsCoordinator';
 import type { ProviderCapabilities, ProviderId } from '../../../core/providers/types';
 import type { ChatRuntime } from '../../../core/runtime/ChatRuntime';
 import type {
+  ApprovalDecisionOption,
   ApprovalCallback,
   AskUserQuestionCallback,
   AutoTurnResult,
@@ -19,14 +24,17 @@ import type {
   SubagentRuntimeState,
 } from '../../../core/runtime/types';
 import type {
+  ApprovalDecision,
   ChatMessage,
   Conversation,
   ConversationMeta,
+  McpServerConfig,
   SlashCommand,
   StreamChunk,
   ToolCallInfo,
 } from '../../../core/types';
 import type ClaudianPlugin from '../../../main';
+import { maybeGetCopilotWorkspaceServices } from '../app/CopilotWorkspaceServices';
 import { COPILOT_PROVIDER_CAPABILITIES } from '../capabilities';
 import { encodeCopilotTurn } from '../prompt/CopilotTurnEncoder';
 import { getCopilotProviderSettings } from '../settings';
@@ -42,13 +50,20 @@ import {
   resolveCopilotAcpLaunchSpec,
   resolveCopilotPromptLaunchSpec,
 } from './copilotAcpSupport';
+import { buildCopilotAcpPromptContent } from './CopilotUserMessageFactory';
 import type { CopilotAcpInitializeResult } from './copilotAcpTypes';
 import type {
   CopilotAcpListSessionsResponse,
   CopilotAcpLoadSessionResponse,
+  CopilotAcpNewSessionRequest,
+  CopilotAcpPermissionOption,
+  CopilotAcpPermissionRequest,
+  CopilotAcpPermissionResponse,
+  CopilotAcpPromptRequest,
   CopilotAcpNewSessionResponse,
   CopilotAcpPromptResponse,
   CopilotAcpSessionConfigOption,
+  CopilotAcpSessionReferenceRequest,
   CopilotAcpSetConfigOptionResponse,
   CopilotAcpSetModeResponse,
 } from './copilotAcpTypes';
@@ -71,6 +86,140 @@ export function resolveCopilotRuntimeModel(
   return resolveActualCopilotModel(normalizedModel);
 }
 
+export function resolveCopilotPermissionMode(modeId: string): 'yolo' | 'plan' | 'normal' | null {
+  const normalized = modeId.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === 'plan' || normalized.endsWith('#plan') || normalized.includes('/plan')) {
+    return 'plan';
+  }
+
+  if (
+    normalized === 'autopilot'
+    || normalized.endsWith('#autopilot')
+    || normalized.includes('autopilot')
+    || normalized.includes('bypasspermissions')
+    || normalized.includes('yolo')
+  ) {
+    return 'yolo';
+  }
+
+  if (
+    normalized === 'agent'
+    || normalized.endsWith('#agent')
+    || normalized.includes('agent')
+    || normalized.includes('safe')
+    || normalized.includes('normal')
+  ) {
+    return 'normal';
+  }
+
+  return null;
+}
+
+export function resolveCopilotSdkPermissionMode(modeId: string): string | null {
+  const permissionMode = resolveCopilotPermissionMode(modeId);
+  if (permissionMode === 'yolo') {
+    return 'bypassPermissions';
+  }
+  if (permissionMode === 'plan') {
+    return 'plan';
+  }
+  if (permissionMode === 'normal') {
+    return 'default';
+  }
+  return null;
+}
+
+export function resolveCopilotSessionModeId(permissionMode: string): string | null {
+  if (permissionMode === 'plan') {
+    return 'https://agentclientprotocol.com/protocol/session-modes#plan';
+  }
+  if (permissionMode === 'yolo') {
+    return 'https://agentclientprotocol.com/protocol/session-modes#autopilot';
+  }
+  if (permissionMode === 'normal') {
+    return 'https://agentclientprotocol.com/protocol/session-modes#agent';
+  }
+  return null;
+}
+
+export function resolveDesiredCopilotSessionModeId(
+  requestedPermissionMode: string | null | undefined,
+  persistedDesiredModeId: string | null,
+): string | null {
+  const requestedModeId = requestedPermissionMode
+    ? resolveCopilotSessionModeId(requestedPermissionMode)
+    : null;
+
+  return requestedModeId ?? persistedDesiredModeId;
+}
+
+function buildRuntimeCommand(command: Partial<SlashCommand> & { name?: unknown }, index: number): SlashCommand | null {
+  const rawName = typeof command.name === 'string' ? command.name.trim() : '';
+  if (!rawName) {
+    return null;
+  }
+
+  return {
+    id: typeof command.id === 'string' && command.id.trim()
+      ? command.id
+      : `copilot:sdk:${rawName}:${index}`,
+    name: rawName,
+    description: typeof command.description === 'string' ? command.description : undefined,
+    argumentHint: typeof command.argumentHint === 'string' ? command.argumentHint : undefined,
+    content: typeof command.content === 'string' ? command.content : '',
+    source: 'sdk',
+    kind: command.kind === 'skill' ? 'skill' : 'command',
+    allowedTools: Array.isArray(command.allowedTools)
+      ? command.allowedTools.filter((value): value is string => typeof value === 'string')
+      : undefined,
+    model: typeof command.model === 'string' ? command.model : undefined,
+    disableModelInvocation: command.disableModelInvocation === true ? true : undefined,
+    userInvocable: typeof command.userInvocable === 'boolean' ? command.userInvocable : undefined,
+  };
+}
+
+export function extractCopilotSupportedCommands(payload: unknown): SlashCommand[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const source = payload as Record<string, unknown>;
+  const candidates = [
+    source.commands,
+    source.availableCommands,
+    source.available_commands,
+    source.slashCommands,
+    source.slash_commands,
+  ];
+
+  const rawCommands = candidates.find(Array.isArray);
+  if (!rawCommands) {
+    return [];
+  }
+
+  return rawCommands.flatMap((entry, index) => {
+    if (typeof entry === 'string') {
+      return [{
+        id: `copilot:sdk:${entry}:${index}`,
+        name: entry,
+        content: '',
+        source: 'sdk' as const,
+      } satisfies SlashCommand];
+    }
+
+    if (!entry || typeof entry !== 'object') {
+      return [];
+    }
+
+    const command = buildRuntimeCommand(entry as Partial<SlashCommand> & { name?: unknown }, index);
+    return command ? [command] : [];
+  });
+}
+
 export function resolveDesiredCopilotSessionModel(
   selectedModel: string,
   persistedDesiredModelId: string | null,
@@ -78,10 +227,142 @@ export function resolveDesiredCopilotSessionModel(
   return selectedModel || persistedDesiredModelId || resolveActualCopilotModel(DEFAULT_COPILOT_MODEL);
 }
 
+export function resolveCopilotActiveMcpServers(
+  mcpManager: Pick<McpServerManager, 'extractMentions' | 'getActiveServers'> | null,
+  promptText: string,
+  enabledMcpServers?: ReadonlySet<string> | null,
+): Record<string, McpServerConfig> {
+  if (!mcpManager) {
+    return {};
+  }
+
+  const mentions = mcpManager.extractMentions(promptText);
+  const activeServerNames = new Set<string>(mentions);
+  for (const serverName of enabledMcpServers ?? []) {
+    activeServerNames.add(serverName);
+  }
+
+  return mcpManager.getActiveServers(activeServerNames);
+}
+
+export function resolveCopilotAcpSessionMcpServers(
+  mcpServers: Record<string, McpServerConfig> | null | undefined,
+): string[] {
+  if (!mcpServers) {
+    return [];
+  }
+
+  return Object.keys(mcpServers);
+}
+
+export function augmentCopilotPromptForImageAttachments(
+  prompt: string,
+  rawUserText: string,
+  hasImages: boolean,
+): string {
+  if (!hasImages || rawUserText.trim()) {
+    return prompt;
+  }
+
+  const imageOnlyInstruction = [
+    'The user attached one or more images.',
+    'Carefully inspect the attached image content and respond based on what you see.',
+    'If there is no additional user text, briefly describe the image and offer a focused next step.',
+  ].join(' ');
+
+  if (!prompt.trim()) {
+    return imageOnlyInstruction;
+  }
+
+  return `${imageOnlyInstruction}\n\n${prompt}`;
+}
+
+export function resolveCopilotPermissionOutcomeOptionId(
+  decision: ApprovalDecision | null | undefined,
+  options?: CopilotAcpPermissionOption[],
+): string {
+  const allowOnce = options?.find((option) => option.optionId === 'allow_once')?.optionId ?? 'allow_once';
+  const allowAlways = options?.find((option) => option.optionId === 'allow_always')?.optionId ?? allowOnce;
+  const rejectOnce = options?.find((option) => option.optionId === 'reject_once')?.optionId ?? 'reject_once';
+
+  if (decision === 'allow') {
+    return allowOnce;
+  }
+
+  if (decision === 'allow-always') {
+    return allowAlways;
+  }
+
+  if (decision && typeof decision === 'object' && decision.type === 'select-option') {
+    return options?.some((option) => option.optionId === decision.value)
+      ? decision.value
+      : rejectOnce;
+  }
+
+  return rejectOnce;
+}
+
+function buildCopilotPermissionDecisionOptions(
+  options?: CopilotAcpPermissionOption[],
+): ApprovalDecisionOption[] | undefined {
+  if (!options || options.length === 0) {
+    return undefined;
+  }
+
+  return options.map((option) => ({
+    label: option.name ?? option.optionId,
+    description: option.kind ? `Copilot permission option: ${option.kind}` : undefined,
+    value: option.optionId,
+    decision: option.optionId === 'allow_once'
+      ? 'allow'
+      : option.optionId === 'allow_always'
+        ? 'allow-always'
+        : option.optionId === 'reject_once'
+          ? 'deny'
+          : undefined,
+  }));
+}
+
+function sanitizeCopilotSessionImageBaseName(fileName: string): string {
+  const trimmed = fileName.trim();
+  const normalized = trimmed || 'attachment';
+  return normalized.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+function extensionForCopilotImage(mediaType: string): string {
+  if (mediaType === 'image/jpeg') return '.jpg';
+  if (mediaType === 'image/gif') return '.gif';
+  if (mediaType === 'image/webp') return '.webp';
+  return '.png';
+}
+
+export function buildCopilotSessionImageMirrorPlan(
+  sessionId: string,
+  images: readonly ChatTurnRequest['images'][number][],
+  homeDir: string,
+): Array<{ filePath: string; data: Buffer }> {
+  const filesDir = path.join(homeDir, '.copilot', 'session-state', sessionId, 'files');
+
+  return images.map((image, index) => {
+    const safeBaseName = sanitizeCopilotSessionImageBaseName(image.name.replace(/\.[^.]+$/, ''));
+    const extension = extensionForCopilotImage(image.mediaType);
+    const filePath = path.join(filesDir, `${index + 1}-${safeBaseName}${extension}`);
+    const rawData = image.data.startsWith('data:')
+      ? image.data.slice(image.data.indexOf(',') + 1)
+      : image.data;
+
+    return {
+      filePath,
+      data: Buffer.from(rawData, 'base64'),
+    };
+  });
+}
+
 export class CopilotChatRuntime implements ChatRuntime {
   readonly providerId: ProviderId = 'copilot';
 
   private plugin: ClaudianPlugin;
+  private mcpManager: McpServerManager | null;
   private acpProcess: CopilotCliProcess | null = null;
   private acpTransport: CopilotRpcTransport | null = null;
   private acpInitializeResult: CopilotAcpInitializeResult | null = null;
@@ -95,6 +376,7 @@ export class CopilotChatRuntime implements ChatRuntime {
   private ready = false;
   private readyListeners = new Set<(ready: boolean) => void>();
   private turnMetadata: ChatTurnMetadata = {};
+  private supportedCommands: SlashCommand[] = [];
   private sessionInvalidated = false;
   private approvalCallback: ApprovalCallback | null = null;
   private approvalDismisser: (() => void) | null = null;
@@ -106,12 +388,14 @@ export class CopilotChatRuntime implements ChatRuntime {
   private resumeCheckpoint: string | undefined;
   private canceled = false;
   private currentExternalContextPaths: string[] = [];
+  private currentActiveMcpServers: Record<string, McpServerConfig> = {};
   private currentModeId: string | null = null;
   private currentModelId: string | null = null;
   private currentConfigValues: Record<string, string> = {};
 
   constructor(plugin: ClaudianPlugin) {
     this.plugin = plugin;
+    this.mcpManager = maybeGetCopilotWorkspaceServices()?.mcpServerManager ?? null;
   }
 
   getCapabilities(): Readonly<ProviderCapabilities> {
@@ -147,9 +431,11 @@ export class CopilotChatRuntime implements ChatRuntime {
       this.desiredSessionId = null;
       this.acpSessionId = null;
       this.currentExternalContextPaths = [];
+      this.currentActiveMcpServers = {};
       this.currentModeId = null;
       this.currentModelId = null;
       this.currentConfigValues = {};
+      this.supportedCommands = [];
       return;
     }
 
@@ -170,7 +456,8 @@ export class CopilotChatRuntime implements ChatRuntime {
   }
 
   async reloadMcpServers(): Promise<void> {
-    // Copilot CLI owns MCP loading. A future ACP turn implementation can add explicit reloads.
+    await this.mcpManager?.loadServers();
+    await this.shutdownAcpProcess();
   }
 
   async ensureReady(options?: ChatRuntimeEnsureReadyOptions): Promise<boolean> {
@@ -208,12 +495,23 @@ export class CopilotChatRuntime implements ChatRuntime {
 
     const providerSettings = this.getProviderSettings();
     const selectedModel = this.resolveModel(queryOptions);
-    const prompt = turn.prompt.trim();
+    const prompt = augmentCopilotPromptForImageAttachments(
+      turn.prompt.trim(),
+      turn.request.text,
+      (turn.request.images?.length ?? 0) > 0,
+    );
+    const images = turn.request.images;
+    const hasImages = (images?.length ?? 0) > 0;
     const history = conversationHistory ?? [];
     const externalContextPaths = [
       ...(turn.request.externalContextPaths ?? []),
       ...(queryOptions?.externalContextPaths ?? []),
     ];
+    this.currentActiveMcpServers = resolveCopilotActiveMcpServers(
+      this.mcpManager,
+      turn.request.text,
+      turn.request.enabledMcpServers ?? queryOptions?.enabledMcpServers,
+    );
     const ready = await this.ensureReady({ externalContextPaths });
 
     yield { type: 'assistant_message_start' };
@@ -224,7 +522,7 @@ export class CopilotChatRuntime implements ChatRuntime {
       return;
     }
 
-    if (!prompt) {
+    if (!prompt && !hasImages) {
       yield { type: 'notice', content: 'Copilot received an empty prompt.', level: 'warning' };
       yield { type: 'done' };
       return;
@@ -238,6 +536,16 @@ export class CopilotChatRuntime implements ChatRuntime {
       };
     }
 
+    const canUseAcpImages = !hasImages || this.acpInitializeResult?.agentCapabilities?.promptCapabilities?.image === true;
+    if (hasImages && (!getCopilotProviderSettings(providerSettings).useACP || this.acpWarning || !canUseAcpImages)) {
+      yield {
+        type: 'error',
+        content: 'Copilot image attachments require ACP prompt support, but ACP is not available for this turn.',
+      };
+      yield { type: 'done' };
+      return;
+    }
+
     if (this.canceled) {
       yield { type: 'done' };
       return;
@@ -246,13 +554,21 @@ export class CopilotChatRuntime implements ChatRuntime {
     if (getCopilotProviderSettings(providerSettings).useACP
       && !this.acpWarning) {
       try {
-        for await (const chunk of this.runAcpTurn(selectedModel, prompt, history)) {
+        for await (const chunk of this.runAcpTurn(selectedModel, prompt, history, images)) {
           yield chunk;
         }
         yield { type: 'done' };
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (hasImages) {
+          yield {
+            type: 'error',
+            content: `ACP turn failed and prompt fallback cannot send image attachments: ${message}`,
+          };
+          yield { type: 'done' };
+          return;
+        }
         yield {
           type: 'notice',
           level: 'warning',
@@ -266,6 +582,7 @@ export class CopilotChatRuntime implements ChatRuntime {
       model: selectedModel,
       allowedTools: queryOptions?.allowedTools,
       externalContextPaths,
+      mcpServers: this.currentActiveMcpServers,
     });
 
     for await (const chunk of this.runPromptProcess(launchSpec)) {
@@ -315,9 +632,11 @@ export class CopilotChatRuntime implements ChatRuntime {
     this.resumeCheckpoint = undefined;
     this.sessionInvalidated = false;
     this.currentExternalContextPaths = [];
+    this.currentActiveMcpServers = {};
     this.currentModeId = null;
     this.currentModelId = null;
     this.currentConfigValues = {};
+    this.supportedCommands = [];
   }
 
   getSessionId(): string | null {
@@ -335,7 +654,12 @@ export class CopilotChatRuntime implements ChatRuntime {
   }
 
   async getSupportedCommands(): Promise<SlashCommand[]> {
-    return [];
+    if (!getCopilotProviderSettings(this.getProviderSettings()).useACP) {
+      return [];
+    }
+
+    await this.ensureReady({ externalContextPaths: this.currentExternalContextPaths });
+    return [...this.supportedCommands];
   }
 
   async listResumeConversations(): Promise<ConversationMeta[]> {
@@ -412,7 +736,6 @@ export class CopilotChatRuntime implements ChatRuntime {
   setAutoTurnCallback(callback: ((result: AutoTurnResult) => void) | null): void {
     this.autoTurnCallback = callback;
   }
-
   consumeTurnMetadata(): ChatTurnMetadata {
     const metadata = { ...this.turnMetadata };
     this.turnMetadata = {};
@@ -474,7 +797,12 @@ export class CopilotChatRuntime implements ChatRuntime {
   }
 
   private async ensureAcpProcess(selectedModel: string, externalContextPaths?: string[]): Promise<void> {
-    const launchSpec = resolveCopilotAcpLaunchSpec(this.plugin, selectedModel, externalContextPaths);
+    const launchSpec = resolveCopilotAcpLaunchSpec(
+      this.plugin,
+      selectedModel,
+      externalContextPaths,
+      this.currentActiveMcpServers,
+    );
     const configKey = JSON.stringify({
       command: launchSpec.command,
       args: launchSpec.args,
@@ -501,6 +829,9 @@ export class CopilotChatRuntime implements ChatRuntime {
     transport.onNotification('session/update', (params) => {
       this.handleAcpSessionUpdate(params);
     });
+    transport.onServerRequest('session/request_permission', async (_requestId, params) => {
+      return this.handleAcpPermissionRequest(params as CopilotAcpPermissionRequest);
+    });
 
     this.acpInitializeResult = await initializeCopilotAcpTransport(transport);
     this.acpProcess = process;
@@ -513,6 +844,7 @@ export class CopilotChatRuntime implements ChatRuntime {
     this.acpTransport = null;
     this.acpInitializeResult = null;
     this.acpConfigKey = null;
+    this.supportedCommands = [];
 
     if (this.acpProcess) {
       await this.acpProcess.shutdown().catch(() => {});
@@ -525,7 +857,7 @@ export class CopilotChatRuntime implements ChatRuntime {
   }
 
   private async ensureAcpSession(selectedModel: string): Promise<{ sessionId: string; createdNew: boolean }> {
-    await this.ensureAcpProcess(selectedModel);
+    await this.ensureAcpProcess(selectedModel, this.currentExternalContextPaths);
 
     const transport = this.acpTransport;
     if (!transport) {
@@ -534,6 +866,9 @@ export class CopilotChatRuntime implements ChatRuntime {
 
     const persistedDesiredModeId = this.currentConfigValues.mode ?? this.currentModeId;
     const persistedDesiredModelId = this.currentConfigValues.model ?? this.currentModelId;
+    const requestedPermissionMode = String(
+      (this.plugin.settings as unknown as Record<string, unknown>).permissionMode ?? 'normal',
+    );
 
     const targetSessionId = this.desiredSessionId ?? this.acpSessionId;
     const cwd = this.plugin.app.vault.adapter && 'basePath' in this.plugin.app.vault.adapter
@@ -544,6 +879,7 @@ export class CopilotChatRuntime implements ChatRuntime {
       if (this.acpSessionId === targetSessionId) {
         await this.applyDesiredSessionConfiguration(targetSessionId, selectedModel, {
           createdNew: false,
+          requestedPermissionMode,
           persistedDesiredModeId,
           persistedDesiredModelId,
         });
@@ -554,8 +890,8 @@ export class CopilotChatRuntime implements ChatRuntime {
         const loaded = await transport.request<CopilotAcpLoadSessionResponse>('session/load', {
           sessionId: targetSessionId,
           cwd,
-          mcpServers: [],
-        });
+          mcpServers: resolveCopilotAcpSessionMcpServers(this.currentActiveMcpServers),
+        } satisfies CopilotAcpSessionReferenceRequest);
         this.acpSessionId = targetSessionId;
         this.captureSessionState(loaded);
         await this.applyDesiredSessionConfiguration(targetSessionId, selectedModel, {
@@ -571,14 +907,15 @@ export class CopilotChatRuntime implements ChatRuntime {
 
     const created = await transport.request<CopilotAcpNewSessionResponse>('session/new', {
       cwd,
-      mcpServers: [],
-    });
+      mcpServers: resolveCopilotAcpSessionMcpServers(this.currentActiveMcpServers),
+    } satisfies CopilotAcpNewSessionRequest);
 
     this.acpSessionId = created.sessionId;
     this.desiredSessionId = created.sessionId;
     this.captureSessionState(created);
     await this.applyDesiredSessionConfiguration(created.sessionId, selectedModel, {
       createdNew: true,
+      requestedPermissionMode,
       persistedDesiredModeId,
       persistedDesiredModelId,
     });
@@ -589,6 +926,7 @@ export class CopilotChatRuntime implements ChatRuntime {
     selectedModel: string,
     prompt: string,
     conversationHistory: ChatMessage[],
+    images?: ChatTurnRequest['images'],
   ): AsyncGenerator<StreamChunk> {
     const transport = this.acpTransport;
     const { sessionId, createdNew } = await this.ensureAcpSession(selectedModel);
@@ -597,6 +935,7 @@ export class CopilotChatRuntime implements ChatRuntime {
     }
 
     const effectivePrompt = this.buildPromptWithConversationHistory(prompt, conversationHistory, createdNew);
+  await this.mirrorAcpSessionImages(sessionId, images);
 
     const queue: StreamChunk[] = [];
     let wake: (() => void) | null = null;
@@ -620,8 +959,8 @@ export class CopilotChatRuntime implements ChatRuntime {
 
     const promptPromise = transport.request<CopilotAcpPromptResponse>('session/prompt', {
       sessionId,
-      prompt: [{ type: 'text', text: effectivePrompt }],
-    }, 0).then(
+      prompt: buildCopilotAcpPromptContent(effectivePrompt, images),
+    } satisfies CopilotAcpPromptRequest, 0).then(
       () => {
         done = true;
         signal();
@@ -693,6 +1032,55 @@ export class CopilotChatRuntime implements ChatRuntime {
     }
   }
 
+  private async handleAcpPermissionRequest(
+    params: CopilotAcpPermissionRequest,
+  ): Promise<CopilotAcpPermissionResponse> {
+    const decisionOptions = buildCopilotPermissionDecisionOptions(params.options);
+    const toolCall = params.toolCall;
+    const rawInput = toolCall?.rawInput ?? {};
+    const description = toolCall?.title?.trim() || 'Copilot permission request';
+    const toolName = typeof toolCall?.kind === 'string' && toolCall.kind.trim()
+      ? `copilot_${toolCall.kind.trim()}`
+      : 'copilot_permission';
+
+    let decision: ApprovalDecision = 'deny';
+    if (this.approvalCallback) {
+      try {
+        decision = await this.approvalCallback(toolName, rawInput, description, {
+          decisionOptions,
+          blockedPath: toolCall?.locations?.[0]?.path,
+        });
+      } finally {
+        this.approvalDismisser?.();
+      }
+    }
+
+    return {
+      outcome: {
+        optionId: resolveCopilotPermissionOutcomeOptionId(decision, params.options),
+      },
+    };
+  }
+
+  private async mirrorAcpSessionImages(
+    sessionId: string,
+    images?: ChatTurnRequest['images'],
+  ): Promise<void> {
+    if (!images || images.length === 0) {
+      return;
+    }
+
+    const plan = buildCopilotSessionImageMirrorPlan(sessionId, images, os.homedir());
+    if (plan.length === 0) {
+      return;
+    }
+
+    const targetDir = path.dirname(plan[0].filePath);
+    await fs.rm(targetDir, { recursive: true, force: true });
+    await fs.mkdir(targetDir, { recursive: true });
+    await Promise.all(plan.map((entry) => fs.writeFile(entry.filePath, entry.data)));
+  }
+
   private captureSessionState(
     response: Pick<CopilotAcpLoadSessionResponse, 'models' | 'modes' | 'configOptions'>,
   ): void {
@@ -749,6 +1137,10 @@ export class CopilotChatRuntime implements ChatRuntime {
         this.syncPermissionModeFromSession();
       }
     }
+
+    if (update.sessionUpdate === 'available_commands_update') {
+      this.supportedCommands = extractCopilotSupportedCommands(update);
+    }
   }
 
   private async applyDesiredSessionConfiguration(
@@ -756,6 +1148,7 @@ export class CopilotChatRuntime implements ChatRuntime {
     selectedModel: string,
     options: {
       createdNew: boolean;
+      requestedPermissionMode: string | null;
       persistedDesiredModeId: string | null;
       persistedDesiredModelId: string | null;
     },
@@ -765,12 +1158,11 @@ export class CopilotChatRuntime implements ChatRuntime {
       return;
     }
 
-    const uiDesiredModeId = this.mapPermissionModeToSessionMode(
-      String((this.plugin.settings as unknown as Record<string, unknown>).permissionMode ?? 'normal'),
+    const uiDesiredModeId = resolveDesiredCopilotSessionModeId(
+      options.requestedPermissionMode,
+      options.persistedDesiredModeId,
     );
-    const desiredModeId = options.createdNew
-      ? (options.persistedDesiredModeId ?? uiDesiredModeId)
-      : options.persistedDesiredModeId;
+    const desiredModeId = uiDesiredModeId;
 
     if (desiredModeId && desiredModeId !== this.currentModeId) {
       const result = await transport.request<CopilotAcpSetModeResponse>('session/set_mode', {
@@ -803,30 +1195,21 @@ export class CopilotChatRuntime implements ChatRuntime {
     }
 
     try {
-      this.permissionModeSyncCallback(this.mapSessionModeToPermissionMode(this.currentModeId));
+      const sdkMode = resolveCopilotSdkPermissionMode(this.currentModeId);
+      if (sdkMode) {
+        this.permissionModeSyncCallback(sdkMode);
+      }
     } catch {
       // Non-critical UI sync.
     }
   }
 
   private mapPermissionModeToSessionMode(mode: string): string | null {
-    if (mode === 'plan') {
-      return 'https://agentclientprotocol.com/protocol/session-modes#plan';
-    }
-    if (mode === 'yolo') {
-      return 'https://agentclientprotocol.com/protocol/session-modes#autopilot';
-    }
-    return 'https://agentclientprotocol.com/protocol/session-modes#agent';
+    return resolveCopilotSessionModeId(mode);
   }
 
   private mapSessionModeToPermissionMode(modeId: string): string {
-    if (modeId.endsWith('#plan')) {
-      return 'plan';
-    }
-    if (modeId.endsWith('#autopilot')) {
-      return 'yolo';
-    }
-    return 'normal';
+    return resolveCopilotPermissionMode(modeId) ?? 'normal';
   }
 
   private buildPromptWithConversationHistory(
@@ -846,8 +1229,7 @@ export class CopilotChatRuntime implements ChatRuntime {
       'Continue this conversation with the following prior transcript as context.',
       '',
       transcript,
-      '',
-      `USER: ${prompt}`,
+      ...(prompt ? ['', `USER: ${prompt}`] : []),
     ].join('\n');
   }
 

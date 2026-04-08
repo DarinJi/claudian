@@ -504,6 +504,35 @@ describe('ClaudianPlugin', () => {
       expect(updated?.messages).toEqual(messages);
     });
 
+    it('should preserve image payloads for Copilot conversations after save', async () => {
+      await plugin.onload();
+
+      const conv = await plugin.createConversation({ providerId: 'copilot' });
+      const messages = [
+        {
+          id: 'msg-1',
+          role: 'user' as const,
+          content: '',
+          timestamp: Date.now(),
+          images: [
+            {
+              id: 'img-1',
+              name: 'test.png',
+              mediaType: 'image/png' as const,
+              size: 10,
+              data: 'YmFzZTY0',
+              source: 'paste' as const,
+            },
+          ],
+        },
+      ];
+
+      await plugin.updateConversation(conv.id, { messages });
+
+      const updated = await plugin.getConversationById(conv.id);
+      expect(updated?.messages[0]?.images?.[0]?.data).toBe('YmFzZTY0');
+    });
+
     it('should update conversation sessionId', async () => {
       await plugin.onload();
 

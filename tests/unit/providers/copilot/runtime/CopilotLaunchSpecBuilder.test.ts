@@ -71,4 +71,28 @@ describe('CopilotLaunchSpecBuilder', () => {
       '--acp',
     ]);
   });
+
+  it('adds additional MCP config when active servers are present', () => {
+    const spec = buildCopilotAcpLaunchSpec({
+      resolvedCliCommand: 'copilot',
+      hostVaultPath: '/vault',
+      env: {},
+      mcpServers: {
+        docs: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem', '/docs'],
+        },
+      },
+    });
+
+    expect(spec.args).toContain('--additional-mcp-config');
+    expect(spec.args).toContain(JSON.stringify({
+      mcpServers: {
+        docs: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem', '/docs'],
+        },
+      },
+    }));
+  });
 });

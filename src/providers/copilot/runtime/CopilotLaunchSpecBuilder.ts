@@ -1,3 +1,4 @@
+import type { McpServerConfig } from '../../../core/types';
 import type { CopilotLaunchSpec } from './copilotLaunchTypes';
 
 export interface BuildCopilotLaunchSpecBaseOptions {
@@ -9,6 +10,7 @@ export interface BuildCopilotLaunchSpecBaseOptions {
   addDirs?: string[];
   allowedTools?: string[];
   extraArgs?: string;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export interface BuildCopilotPromptLaunchSpecOptions extends BuildCopilotLaunchSpecBaseOptions {
@@ -56,6 +58,10 @@ function buildCommonArgs(options: BuildCopilotLaunchSpecBaseOptions): string[] {
 
   if (options.model) {
     args.push('--model', options.model);
+  }
+
+  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
+    args.push('--additional-mcp-config', JSON.stringify({ mcpServers: options.mcpServers }));
   }
 
   return args;

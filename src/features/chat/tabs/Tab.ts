@@ -1649,7 +1649,7 @@ export function setupServiceCallbacks(tab: TabData, plugin: ClaudianPlugin): voi
     });
     tab.service.setPermissionModeSyncCallback((sdkMode) => {
       let mode: string;
-      if (sdkMode === 'bypassPermissions') mode = 'yolo';
+      if (sdkMode === 'bypassPermissions' || sdkMode === 'yolo') mode = 'yolo';
       else if (sdkMode === 'plan') mode = 'plan';
       else mode = 'normal';
 
