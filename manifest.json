@@ -1,9 +1,9 @@
 {
   "id": "claudian",
-  "name": "Claudian",
-  "version": "2.0.1",
+  "name": "Claudian Copilot",
+  "version": "2.1.0",
   "minAppVersion": "1.4.5",
-  "description": "Embeds Claude Code as an AI collaborator in your vault. Your vault becomes Claude's working directory, giving it full agentic capabilities: file read/write, search, bash commands, and multi-step workflows.",
+  "description": "Embeds Claude Code and Copilot as AI collaborators in your vault. Your vault becomes the agent's working directory, giving it full agentic capabilities: file read/write, search, bash commands, and multi-step workflows.",
   "author": "Yishen Tu",
   "authorUrl": "https://github.com/YishenTu",
   "isDesktopOnly": true

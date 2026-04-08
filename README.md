@@ -1,4 +1,4 @@
-# Claudian
+# Claudian Copilot
 
 ![GitHub stars](https://img.shields.io/github/stars/YishenTu/claudian?style=social)
 ![GitHub release](https://img.shields.io/github/v/release/YishenTu/claudian)
